@@ -1965,10 +1965,6 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                 }
             }
             break;
-        case Pyc::RERAISE:
-        case Pyc::RERAISE_A:
-            /* Python 3.11 cleanup opcode. */
-            break;
         case Pyc::RETURN_VALUE:
         case Pyc::INSTRUMENTED_RETURN_VALUE_A:
             {
