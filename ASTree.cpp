@@ -3111,9 +3111,7 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
 
                         comp->generators().front()->setIter(call->pparams().front());
 
-                        inLambda = true;
                         print_src(inner, mod, pyc_output);
-                        inLambda = false;
 
                         break;
                     }
