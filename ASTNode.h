@@ -600,6 +600,7 @@ public:
     CompType getComprehensionType() const { return m_comp_type; }
     int start() const { return m_start; }
 
+    void setIter(PycRef<ASTNode> iter) { m_iter = std::move(iter); }
     void setIndex(PycRef<ASTNode> idx) { m_idx = std::move(idx); init(); }
     void setCondition(PycRef<ASTNode> cond) { m_cond = std::move(cond); }
     void setComprehension(bool comp) { m_comp = comp; }

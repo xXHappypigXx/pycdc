@@ -3011,8 +3011,6 @@ static void end_line(std::ostream& pyc_output)
     pyc_output << "\n";
 }
 
-static std::unordered_set<PycCode *> code_seen;
-
 int cur_indent = -1;
 static void print_block(PycRef<ASTBlock> blk, PycModule* mod,
                         std::ostream& pyc_output)
@@ -3097,7 +3095,35 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
     case ASTNode::NODE_CALL:
         {
             PycRef<ASTCall> call = node.cast<ASTCall>();
-            print_src(call->func(), mod, pyc_output);
+            
+            if (call->func()->type() == ASTNode::NODE_FUNCTION) {
+                PycRef<ASTNode> code = call->func().cast<ASTFunction>()->code();
+                PycRef<PycCode> code_src = code.cast<ASTObject>()->object().cast<PycCode>();
+                
+                PycRef<ASTNode> source = BuildFromCode(code_src, mod);
+                PycRef<ASTNode> first = source.cast<ASTNodeList>()->nodes().front();
+                
+                if (first->type() == ASTNode::NODE_RETURN) {
+                    PycRef<ASTNode> inner = first.cast<ASTReturn>()->value();
+
+                    if (inner->type() == ASTNode::NODE_COMPREHENSION) {
+                        PycRef<ASTComprehension> comp = inner.cast<ASTComprehension>();
+
+                        comp->generators().front()->setIter(call->pparams().front());
+
+                        inLambda = true;
+                        print_src(inner, mod, pyc_output);
+                        inLambda = false;
+
+                        break;
+                    }
+                }
+
+                print_src(source, mod, pyc_output);
+            } else {
+                print_src(call->func(), mod, pyc_output);
+            }
+
             pyc_output << "(";
             bool first = true;
             for (const auto& param : call->pparams()) {
@@ -3492,24 +3518,6 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
             PycRef<ASTNode> code = node.cast<ASTFunction>()->code();
             PycRef<PycCode> code_src = code.cast<ASTObject>()->object().cast<PycCode>();
 
-            code_seen.insert((PycCode *)code_src);
-            
-            PycRef<ASTNode> source = BuildFromCode(code_src, mod).cast<ASTNodeList>()->nodes().front();
-
-            if (source->type() == ASTNode::NODE_RETURN) {
-                PycRef<ASTNode> inner = source.cast<ASTReturn>()->value();
-
-                if (inner->type() == ASTNode::NODE_COMPREHENSION) {
-                    PycRef<ASTComprehension> comp = inner.cast<ASTComprehension>();
-
-                    inLambda = true;
-                    print_src(inner, mod, pyc_output);
-                    inLambda = false;
-
-                    break;
-                }
-            }
-
             pyc_output << "(lambda ";
             ASTFunction::defarg_t defargs = node.cast<ASTFunction>()->defargs();
             ASTFunction::defarg_t kwdefargs = node.cast<ASTFunction>()->kwdefargs();
@@ -3800,6 +3808,8 @@ bool print_docstring(PycRef<PycObject> obj, int indent, PycModule* mod,
     }
     return false;
 }
+
+static std::unordered_set<PycCode *> code_seen;
 
 void decompyle(PycRef<PycCode> code, PycModule* mod, std::ostream& pyc_output)
 {
