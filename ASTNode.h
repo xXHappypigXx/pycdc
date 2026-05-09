@@ -24,7 +24,7 @@ public:
         NODE_LOCALS,
     };
 
-    ASTNode(int type = NODE_INVALID) : m_refs(), m_type(type), m_processed(), m_offset() { }
+    ASTNode(int type = NODE_INVALID) : m_refs(), m_type(type), m_processed(), m_offset(-1) { }
     virtual ~ASTNode() { }
 
     int type() const { return internalGetType(this); }
@@ -555,7 +555,9 @@ public:
         if (m_cur_offset != -1) {
             if (m_last_offset == -1) {
                 m_last_offset = m_cur_offset;
-                setOffset(m_cur_offset);
+                if (offset() == -1) {
+                    setOffset(m_cur_offset);
+                }
             }
             if (set_offset && node->type() != NODE_BLOCK) {
                 node->setOffset(m_last_offset);

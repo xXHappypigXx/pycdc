@@ -114,9 +114,13 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
 #endif
 
         curblock->setCurOffset(pos);
-        /*if (curblock->offset() == 0) {
-            curblock->setOffset(pos - 2);
-        }*/
+        if (curblock->offset() == -1) {
+            if (pos > 0) {
+                curblock->setOffset(pos - 2);
+            } else {
+                curblock->setOffset(0);
+            }
+        }
 
         while (next_exception_entry < exception_entries.size()
                 && exception_entries[next_exception_entry].start_offset < pos) {
