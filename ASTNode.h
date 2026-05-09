@@ -18,7 +18,7 @@ public:
         NODE_COMPREHENSION, NODE_LOADBUILDCLASS, NODE_AWAITABLE,
         NODE_FORMATTEDVALUE, NODE_JOINEDSTR, NODE_CONST_MAP,
         NODE_ANNOTATED_VAR, NODE_CHAINSTORE, NODE_TERNARY,
-        NODE_KW_NAMES_MAP,
+        NODE_KW_NAMES_MAP, NODE_KEY_VALUE_PAIR,
 
         // Empty node types
         NODE_LOCALS,
@@ -586,6 +586,10 @@ private:
 
 class ASTIterBlock : public ASTBlock {
 public:
+    enum CompType {
+        COMP_LIST, COMP_SET, COMP_DICT, COMP_GEN
+    };
+
     ASTIterBlock(ASTBlock::BlkType blktype, int start, int end, PycRef<ASTNode> iter)
         : ASTBlock(blktype, end), m_iter(std::move(iter)), m_idx(), m_comp(), m_start(start) { }
 
@@ -593,17 +597,20 @@ public:
     PycRef<ASTNode> index() const { return m_idx; }
     PycRef<ASTNode> condition() const { return m_cond; }
     bool isComprehension() const { return m_comp; }
+    CompType getComprehensionType() const { return m_comp_type; }
     int start() const { return m_start; }
 
     void setIndex(PycRef<ASTNode> idx) { m_idx = std::move(idx); init(); }
     void setCondition(PycRef<ASTNode> cond) { m_cond = std::move(cond); }
     void setComprehension(bool comp) { m_comp = comp; }
+    void setComprehensionType(CompType type) { m_comp_type = type; }
 
 private:
     PycRef<ASTNode> m_iter;
     PycRef<ASTNode> m_idx;
     PycRef<ASTNode> m_cond;
     bool m_comp;
+    CompType m_comp_type;
     int m_start;
 };
 
@@ -755,6 +762,20 @@ private:
     PycRef<ASTNode> m_if_block; // contains "condition" and "negative"
     PycRef<ASTNode> m_if_expr;
     PycRef<ASTNode> m_else_expr;
+};
+
+class ASTKVPair : public ASTNode
+{
+public:
+    ASTKVPair(PycRef<ASTNode> key, PycRef<ASTNode> value)
+        : ASTNode(NODE_KEY_VALUE_PAIR), m_key(std::move(key)), m_value(std::move(value)) { }
+
+    PycRef<ASTNode> key() const noexcept { return m_key; }
+    PycRef<ASTNode> value() const noexcept { return m_value; }
+
+private:
+    PycRef<ASTNode> m_key;
+    PycRef<ASTNode> m_value;
 };
 
 #endif

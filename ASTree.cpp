@@ -591,7 +591,11 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                         PycRef<ASTNode> fun_code = param.cast<ASTFunction>()->code();
                         PycRef<PycCode> code_src = fun_code.cast<ASTObject>()->object().cast<PycCode>();
                         PycRef<PycString> function_name = code_src->name();
-                        if (function_name->isEqual("<lambda>")) {
+                        if (function_name->isEqual("<lambda>") ||
+                                function_name->isEqual("<listcomp>") ||
+                                function_name->isEqual("<setcomp>") ||
+                                function_name->isEqual("<dictcomp>") ||
+                                function_name->isEqual("<genexpr>")) {
                             pparamList.push_front(param);
                         } else {
                             // Decorator used
@@ -998,6 +1002,7 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
 
                 int end;
                 bool comprehension = false;
+                ASTIterBlock::CompType comprehension_type = ASTIterBlock::COMP_LIST;
 
                 // before 3.8, there is a SETUP_LOOP instruction with block start and end position,
                 //    the operand is usually a jump to a POP_BLOCK instruction
@@ -1007,7 +1012,31 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                     if (mod->verCompare(3, 10) >= 0)
                         end *= sizeof(uint16_t); // // BPO-27129
                     end += pos;
-                    comprehension = strcmp(code->name()->value(), "<listcomp>") == 0;
+                    const char* name = code->name()->value();
+                    comprehension = strcmp(name, "<listcomp>") == 0 ||
+                                    strcmp(name, "<setcomp>") == 0 ||
+                                    strcmp(name, "<dictcomp>") == 0 ||
+                                    strcmp(name, "<genexpr>") == 0;
+                    if (strcmp(name, "<listcomp>") == 0)
+                    {
+                        comprehension = true;
+                        comprehension_type = ASTIterBlock::COMP_LIST;
+                    }
+                    else if (strcmp(name, "<setcomp>") == 0)
+                    {
+                        comprehension = true;
+                        comprehension_type = ASTIterBlock::COMP_SET;
+                    }
+                    else if (strcmp(name, "<dictcomp>") == 0)
+                    {
+                        comprehension = true;
+                        comprehension_type = ASTIterBlock::COMP_DICT;
+                    }
+                    else if (strcmp(name, "<genexpr>") == 0)
+                    {
+                        comprehension = true;
+                        comprehension_type = ASTIterBlock::COMP_GEN;
+                    }
                 } else {
                     PycRef<ASTBlock> top = blocks.top();
                     end = top->end(); // block end position from SETUP_LOOP
@@ -1020,6 +1049,7 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
 
                 PycRef<ASTIterBlock> forblk = new ASTIterBlock(ASTBlock::BLK_FOR, curpos, end, iter);
                 forblk->setComprehension(comprehension);
+                forblk->setComprehensionType(comprehension_type);
                 blocks.push(forblk.cast<ASTBlock>());
                 curblock = blocks.top();
 
@@ -1529,6 +1559,38 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                 }
             }
             break;
+        case Pyc::SET_ADD:
+        case Pyc::SET_ADD_A:
+            {
+                PycRef<ASTNode> value = stack.top();
+                stack.pop();
+
+                PycRef<ASTNode> set = stack.top();
+
+                if (curblock->blktype() == ASTBlock::BLK_FOR
+                        && curblock.cast<ASTIterBlock>()->isComprehension()) {
+                    stack.pop();
+                    stack.push(new ASTComprehension(value));
+                } else {
+                    stack.push(new ASTSubscr(set, value)); /* Total hack */
+                }
+            }
+            break;
+        case Pyc::MAP_ADD_A:
+            {
+                PycRef<ASTNode> value = stack.top();
+                stack.pop();
+
+                PycRef<ASTNode> key = stack.top();
+                stack.pop();
+
+                if (curblock->blktype() == ASTBlock::BLK_FOR
+                        && curblock.cast<ASTIterBlock>()->isComprehension()) {
+                    stack.pop();
+                    stack.push(new ASTComprehension(new ASTKVPair(key, value)));
+                }
+            }
+            break;
         case Pyc::SET_UPDATE_A:
             {
                 PycRef<ASTNode> rhs = stack.top();
@@ -1870,17 +1932,18 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
 
                 if (curblock->blktype() == ASTBlock::BLK_FOR
                         && curblock.cast<ASTIterBlock>()->isComprehension()) {
+                    stack.push(value);
                     /* This relies on some really uncertain logic...
                      * If it's a comprehension, the only POP_TOP should be
                      * a call to append the iter to the list.
                      */
-                    if (value.type() == ASTNode::NODE_CALL) {
+                    /*if (value.type() == ASTNode::NODE_CALL) {
                         auto& pparams = value.cast<ASTCall>()->pparams();
                         if (!pparams.empty()) {
                             PycRef<ASTNode> res = pparams.front();
                             stack.push(new ASTComprehension(res));
                         }
-                    }
+                    }*/
                 }
             }
             break;
@@ -1970,6 +2033,17 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
             {
                 PycRef<ASTNode> value = stack.top();
                 stack.pop();
+                if (value.type() == '0') {
+                    value = stack.top();
+                    stack.pop();
+                }
+                
+                /*auto nodes = curblock->nodes();
+                for (auto node = nodes.begin(); node != nodes.end(); ++node)
+                {
+                    PycRef<ASTNode> cur = *node;
+                    fprintf(stderr, "blk node type %d\n", cur.cast<ASTCall>()->func()->type());
+                } */
                 curblock->append(new ASTReturn(value));
 
                 if ((curblock->blktype() == ASTBlock::BLK_IF
@@ -2669,7 +2743,13 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
             {
                 PycRef<ASTNode> value = stack.top();
                 stack.pop();
-                curblock->append(new ASTReturn(value, ASTReturn::YIELD));
+
+                if (curblock->blktype() == ASTBlock::BLK_FOR
+                        && curblock.cast<ASTIterBlock>()->isComprehension()) {
+                    stack.push(new ASTComprehension(value));
+                } else {
+                    curblock->append(new ASTReturn(value, ASTReturn::YIELD));
+                }
             }
             break;
         case Pyc::SETUP_ANNOTATIONS:
@@ -2931,6 +3011,8 @@ static void end_line(std::ostream& pyc_output)
     pyc_output << "\n";
 }
 
+static std::unordered_set<PycCode *> code_seen;
+
 int cur_indent = -1;
 static void print_block(PycRef<ASTBlock> blk, PycModule* mod,
                         std::ostream& pyc_output)
@@ -3142,8 +3224,27 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
     case ASTNode::NODE_COMPREHENSION:
         {
             PycRef<ASTComprehension> comp = node.cast<ASTComprehension>();
+            
+            std::string opening, closing;
 
-            pyc_output << "[ ";
+            switch (comp->generators().front()->getComprehensionType())
+            {
+                case ASTIterBlock::COMP_SET:
+                case ASTIterBlock::COMP_DICT:
+                    opening = "{ ";
+                    closing = " }";
+                    break;
+                case ASTIterBlock::COMP_GEN:
+                    opening = "( ";
+                    closing = " )";
+                    break;
+                case ASTIterBlock::COMP_LIST:
+                default:
+                    opening = "[ ";
+                    closing = " ]";
+            }
+
+            pyc_output << opening;
             print_src(comp->result(), mod, pyc_output);
 
             for (const auto& gen : comp->generators()) {
@@ -3156,7 +3257,7 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
                     print_src(gen->condition(), mod, pyc_output);
                 }
             }
-            pyc_output << " ]";
+            pyc_output << closing;
         }
         break;
     case ASTNode::NODE_MAP:
@@ -3388,9 +3489,28 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
     case ASTNode::NODE_FUNCTION:
         {
             /* Actual named functions are NODE_STORE with a name */
-            pyc_output << "(lambda ";
             PycRef<ASTNode> code = node.cast<ASTFunction>()->code();
             PycRef<PycCode> code_src = code.cast<ASTObject>()->object().cast<PycCode>();
+
+            code_seen.insert((PycCode *)code_src);
+            
+            PycRef<ASTNode> source = BuildFromCode(code_src, mod).cast<ASTNodeList>()->nodes().front();
+
+            if (source->type() == ASTNode::NODE_RETURN) {
+                PycRef<ASTNode> inner = source.cast<ASTReturn>()->value();
+
+                if (inner->type() == ASTNode::NODE_COMPREHENSION) {
+                    PycRef<ASTComprehension> comp = inner.cast<ASTComprehension>();
+
+                    inLambda = true;
+                    print_src(inner, mod, pyc_output);
+                    inLambda = false;
+
+                    break;
+                }
+            }
+
+            pyc_output << "(lambda ";
             ASTFunction::defarg_t defargs = node.cast<ASTFunction>()->defargs();
             ASTFunction::defarg_t kwdefargs = node.cast<ASTFunction>()->kwdefargs();
             auto da = defargs.cbegin();
@@ -3646,6 +3766,15 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
             //pyc_output << ")";
         }
         break;
+    case ASTNode::NODE_KEY_VALUE_PAIR:
+        {
+            PycRef<ASTKVPair> kv_pair = node.cast<ASTKVPair>();
+
+            print_src(kv_pair->key(), mod, pyc_output);
+            pyc_output << ": ";
+            print_src(kv_pair->value(), mod, pyc_output);
+        }
+        break;
     default:
         pyc_output << "<NODE:" << node->type() << ">";
         fprintf(stderr, "Unsupported Node type: %d\n", node->type());
@@ -3671,8 +3800,6 @@ bool print_docstring(PycRef<PycObject> obj, int indent, PycModule* mod,
     }
     return false;
 }
-
-static std::unordered_set<PycCode *> code_seen;
 
 void decompyle(PycRef<PycCode> code, PycModule* mod, std::ostream& pyc_output)
 {
