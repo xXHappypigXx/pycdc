@@ -113,6 +113,11 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
         fprintf(stderr, "\n");
 #endif
 
+        curblock->setCurOffset(pos);
+        /*if (curblock->offset() == 0) {
+            curblock->setOffset(pos - 2);
+        }*/
+
         while (next_exception_entry < exception_entries.size()
                 && exception_entries[next_exception_entry].start_offset < pos) {
             next_exception_entry++;
@@ -1300,6 +1305,9 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                 if (popped)
                     ifblk->init(popped);
 
+                ifblk->setOffset(blocks.top()->lastOffset() + 2);
+                ifblk->setLastOffset(pos - 2);
+
                 blocks.push(ifblk.cast<ASTBlock>());
                 curblock = blocks.top();
             }
@@ -1312,8 +1320,44 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                 int offs = operand;
                 if (mod->verCompare(3, 10) >= 0)
                     offs *= sizeof(uint16_t); // // BPO-27129 
+                else {
+                //if (offs < pos) {
+                    fprintf(stderr, "blk start %d end %d type %d\njump dest %d pos %d\n\n", curblock->offset(), curblock->end(), curblock->blktype(), offs, pos);
 
-                if (offs < pos) {
+                    if (offs >= curblock->end()) { // Forward jump out of block = break
+                        curblock->append(new ASTKeyword(ASTKeyword::KW_BREAK));
+                        break;
+                    }
+                    if (pos < curblock->end() || (pos <= curblock->end() && curblock->blktype() != ASTBlock::BLK_FOR && curblock->blktype() != ASTBlock::BLK_WHILE)) {
+                        // Handle jumps which aren't the jump from the end of a loop to the start
+                        if (curblock->blktype() == ASTBlock::BLK_FOR || curblock->blktype() == ASTBlock::BLK_WHILE) {
+                            if (offs == curblock->offset()) {
+                                curblock->append(new ASTKeyword(ASTKeyword::KW_CONTINUE));
+                                break;
+                            } else if (offs < curblock->offset()) {
+                                curblock->append(new ASTKeyword(ASTKeyword::KW_BREAK));
+                                break;
+                            } else {
+                                // Jump to the inside of block, potentially while True
+                            }
+                        } else if (curblock->blktype() == ASTBlock::BLK_IF && pos == curblock->end() && offs == curblock->offset()) {
+                            // a jump to the condition of an if block? That's a while block.
+                            curblock->setBlktype(ASTBlock::BLK_WHILE);
+
+                            stack_hist.pop(); // IF BLOCK STORE THE STACK OR SOMETHING I JUST ADDED THIS SO STACK HISTORY IS EMPTY BY THE END
+
+                            PycRef<ASTBlock> tmp = curblock;
+                            blocks.pop();
+                            curblock = blocks.top();
+                            curblock->append(tmp.cast<ASTNode>());
+                        } else {
+                            // Walk down stack to find to which loop it jumps back
+                            // If it jumps to first found loop, continue
+                            // If it jumps to second found loop, break
+                            // otherwise cry
+                        }
+                    }
+
                     if (curblock->blktype() == ASTBlock::BLK_FOR) {
                         bool is_jump_to_start = offs == curblock.cast<ASTIterBlock>()->start();
                         bool should_pop_for_block = curblock.cast<ASTIterBlock>()->isComprehension();
@@ -1336,7 +1380,7 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                                 curblock->append(tmp.cast<ASTNode>());
                             }
                         }
-                    } else if (curblock->blktype() == ASTBlock::BLK_ELSE) {
+                    } else if (mod->verCompare(3, 8) < 0 && curblock->blktype() == ASTBlock::BLK_ELSE) {
                         stack = stack_hist.top();
                         stack_hist.pop();
 
@@ -1351,13 +1395,21 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                             curblock = blocks.top();
                         }
                     } else {
-                        curblock->append(new ASTKeyword(ASTKeyword::KW_CONTINUE));
+                        /*if (offs < curblock->offset()) {
+                            curblock->append(new ASTKeyword(ASTKeyword::KW_CONTINUE));
+                        } else {
+                            curblock->append(new ASTKeyword(ASTKeyword::KW_BREAK));
+                        }*/
                     }
 
                     /* We're in a loop, this jumps back to the start */
                     /* I think we'll just ignore this case... */
                     break; // Bad idea? Probably!
                 }
+                /*else if (opcode == Pyc::JUMP_ABSOLUTE_A) {
+                    //fprintf(stderr, "jump forward %d %d\n", offs, pos)
+                    curblock->append(new ASTKeyword(ASTKeyword::KW_BREAK));
+                }*/
 
                 if (curblock->blktype() == ASTBlock::BLK_CONTAINER) {
                     PycRef<ASTContainerBlock> cont = curblock.cast<ASTContainerBlock>();
@@ -3109,6 +3161,7 @@ void print_src(PycRef<ASTNode> node, PycModule* mod, std::ostream& pyc_output)
                     if (inner->type() == ASTNode::NODE_COMPREHENSION) {
                         PycRef<ASTComprehension> comp = inner.cast<ASTComprehension>();
 
+                        // very hacky way to replace comprehension placeholder parameter
                         comp->generators().front()->setIter(call->pparams().front());
 
                         print_src(inner, mod, pyc_output);

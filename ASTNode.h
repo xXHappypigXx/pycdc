@@ -24,18 +24,21 @@ public:
         NODE_LOCALS,
     };
 
-    ASTNode(int type = NODE_INVALID) : m_refs(), m_type(type), m_processed() { }
+    ASTNode(int type = NODE_INVALID) : m_refs(), m_type(type), m_processed(), m_offset() { }
     virtual ~ASTNode() { }
 
     int type() const { return internalGetType(this); }
 
     bool processed() const { return m_processed; }
     void setProcessed() { m_processed = true; }
+    int offset() const { return m_offset; }
+    void setOffset(int offset) { m_offset = offset; }
 
 private:
     int m_refs;
     int m_type;
     bool m_processed;
+    int m_offset;
 
     // Hack to make clang happy :(
     static int internalGetType(const ASTNode *node)
@@ -537,16 +540,30 @@ public:
         BLK_WHILE, BLK_FOR, BLK_WITH, BLK_ASYNCFOR
     };
 
-    ASTBlock(BlkType blktype, int end = 0, int inited = 0)
-        : ASTNode(NODE_BLOCK), m_blktype(blktype), m_end(end), m_inited(inited) { }
+    ASTBlock(BlkType blktype, int end = 0, int inited = 0, int begin_offset = -1)
+        : ASTNode(NODE_BLOCK), m_blktype(blktype), m_end(end), m_cur_offset(begin_offset), m_last_offset(begin_offset), m_inited(inited) { }
 
     BlkType blktype() const { return m_blktype; }
+    void setBlktype(BlkType type) { m_blktype = type; }
     int end() const { return m_end; }
     const list_t& nodes() const { return m_nodes; }
     list_t::size_type size() const { return m_nodes.size(); }
     void removeFirst();
     void removeLast();
-    void append(PycRef<ASTNode> node) { m_nodes.emplace_back(std::move(node)); }
+    void append(PycRef<ASTNode> node, bool set_offset = true) {
+        fprintf(stderr, "append %d\n", m_cur_offset);
+        if (m_cur_offset != -1) {
+            if (m_last_offset == -1) {
+                m_last_offset = m_cur_offset;
+                setOffset(m_cur_offset);
+            }
+            if (set_offset && node->type() != NODE_BLOCK) {
+                node->setOffset(m_last_offset);
+                m_last_offset = m_cur_offset;
+            }
+        }
+        m_nodes.emplace_back(std::move(node));
+    }
     const char* type_str() const;
 
     virtual int inited() const { return m_inited; }
@@ -554,11 +571,16 @@ public:
     virtual void init(int init) { m_inited = init; }
 
     void setEnd(int end) { m_end = end; }
+    void setCurOffset(int offset) { m_cur_offset = offset; }
+    int lastOffset() const { return m_last_offset; }
+    void setLastOffset(int offset) { m_last_offset = offset; }
 
 private:
     BlkType m_blktype;
     int m_end;
     list_t m_nodes;
+    int m_cur_offset;
+    int m_last_offset;
 
 protected:
     int m_inited;   /* Is the block's definition "complete" */
