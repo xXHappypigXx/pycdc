@@ -259,7 +259,7 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
             }
         }
 
-        if (curblock->blktype() == ASTBlock::BLK_SHORT_CIRCUIT && pos > curblock->end()) {
+        while (curblock->blktype() == ASTBlock::BLK_SHORT_CIRCUIT && pos > curblock->end()) {
             //fprintf(stderr, "pos %d end %d opcode %s\n", pos, curblock->end(), Pyc::OpcodeName(opcode));
             PycRef<ASTShortCircuit> scblk = curblock.cast<ASTShortCircuit>();
             PycRef<ASTNode> right = stack.top();
