@@ -259,6 +259,16 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
             }
         }
 
+        if (curblock->blktype() == ASTBlock::BLK_SHORT_CIRCUIT && pos > curblock->end()) {
+            //fprintf(stderr, "pos %d end %d opcode %s\n", pos, curblock->end(), Pyc::OpcodeName(opcode));
+            PycRef<ASTShortCircuit> scblk = curblock.cast<ASTShortCircuit>();
+            PycRef<ASTNode> right = stack.top();
+            stack.pop();
+            stack.push(new ASTBinary(scblk->left(), right, scblk->op()));
+            blocks.pop();
+            curblock = blocks.top();
+        }
+
         switch (opcode) {
         case Pyc::BINARY_OP_A:
             {
@@ -1180,6 +1190,27 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
         case Pyc::JUMP_IF_NOT_EXC_MATCH_A:
             {
                 PycRef<ASTNode> cond = stack.top();
+
+                int offs = operand;
+                if (mod->verCompare(3, 10) >= 0)
+                    offs *= sizeof(uint16_t); // // BPO-27129
+                if (mod->verCompare(3, 12) >= 0
+                        || opcode == Pyc::JUMP_IF_FALSE_A
+                        || opcode == Pyc::JUMP_IF_TRUE_A
+                        || opcode == Pyc::POP_JUMP_FORWARD_IF_TRUE_A
+                        || opcode == Pyc::POP_JUMP_FORWARD_IF_FALSE_A) {
+                    /* Offset is relative in these cases */
+                    offs += pos;
+                }
+
+                if (mod->verCompare(3, 8) >= 0 && (opcode == Pyc::JUMP_IF_FALSE_OR_POP_A || opcode == Pyc::JUMP_IF_TRUE_OR_POP_A)) {
+                    PycRef<ASTShortCircuit> scblk = new ASTShortCircuit(offs, cond, opcode == Pyc::JUMP_IF_FALSE_OR_POP_A ? ASTBinary::BIN_LOG_AND : ASTBinary::BIN_LOG_OR);
+                    stack.pop();
+                    blocks.push(scblk.cast<ASTBlock>());
+                    curblock = blocks.top();
+                    break;
+                }
+
                 PycRef<ASTCondBlock> ifblk;
                 int popped = ASTCondBlock::UNINITED;
 
@@ -1223,18 +1254,6 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                         || opcode == Pyc::POP_JUMP_IF_TRUE_A
                         || opcode == Pyc::POP_JUMP_FORWARD_IF_TRUE_A
                         || opcode == Pyc::INSTRUMENTED_POP_JUMP_IF_TRUE_A;
-
-                int offs = operand;
-                if (mod->verCompare(3, 10) >= 0)
-                    offs *= sizeof(uint16_t); // // BPO-27129
-                if (mod->verCompare(3, 12) >= 0
-                        || opcode == Pyc::JUMP_IF_FALSE_A
-                        || opcode == Pyc::JUMP_IF_TRUE_A
-                        || opcode == Pyc::POP_JUMP_FORWARD_IF_TRUE_A
-                        || opcode == Pyc::POP_JUMP_FORWARD_IF_FALSE_A) {
-                    /* Offset is relative in these cases */
-                    offs += pos;
-                }
 
                 if (cond.type() == ASTNode::NODE_COMPARE
                         && cond.cast<ASTCompare>()->op() == ASTCompare::CMP_EXCEPTION) {
@@ -1354,6 +1373,8 @@ PycRef<ASTNode> BuildFromCode(PycRef<PycCode> code, PycModule* mod)
                             blocks.pop();
                             curblock = blocks.top();
                             curblock->append(tmp.cast<ASTNode>());
+
+                            break;
                         } else {
                             // Walk down stack to find to which loop it jumps back
                             // If it jumps to first found loop, continue

@@ -537,7 +537,8 @@ public:
     enum BlkType {
         BLK_MAIN, BLK_IF, BLK_ELSE, BLK_ELIF, BLK_TRY,
         BLK_CONTAINER, BLK_EXCEPT, BLK_FINALLY,
-        BLK_WHILE, BLK_FOR, BLK_WITH, BLK_ASYNCFOR
+        BLK_WHILE, BLK_FOR, BLK_WITH, BLK_ASYNCFOR,
+        BLK_SHORT_CIRCUIT
     };
 
     ASTBlock(BlkType blktype, int end = 0, int inited = 0, int begin_offset = -1)
@@ -551,7 +552,7 @@ public:
     void removeFirst();
     void removeLast();
     void append(PycRef<ASTNode> node, bool set_offset = true) {
-        fprintf(stderr, "append %d\n", m_cur_offset);
+        //ASTShortCircuitfprintf(stderr, "append %d\n", m_cur_offset);
         if (m_cur_offset != -1) {
             if (m_last_offset == -1) {
                 m_last_offset = m_cur_offset;
@@ -670,6 +671,20 @@ public:
 private:
     PycRef<ASTNode> m_expr;
     PycRef<ASTNode> m_var;      // optional value
+};
+
+
+class ASTShortCircuit : public ASTBlock {
+public:
+    ASTShortCircuit(int end, PycRef<ASTNode> left, int op)
+        : ASTBlock(ASTBlock::BLK_SHORT_CIRCUIT, end), m_left(left), m_op(op) { }
+    
+    PycRef<ASTNode> left() const { return m_left; }
+    int op() const { return m_op; }
+    
+private:
+    PycRef<ASTNode> m_left;
+    int m_op;
 };
 
 class ASTComprehension : public ASTNode {
